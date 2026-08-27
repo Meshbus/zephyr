@@ -1,0 +1,20 @@
+# Copyright (c) 2026 FoBE Studio
+# SPDX-License-Identifier: Apache-2.0
+
+description: Semtech LR2021 LoRa transceiver
+
+compatible: "semtech,lr2021"
+
+include: semtech,lr20xx-base.yaml
+
+properties:
+  reset-gpios:
+    required: true
+  busy-gpios:
+    required: true
+  irq-gpios:
+    required: true
+  spi-max-frequency:
+    required: true
+  irq-dio:
+    required: true

@@ -1,0 +1,208 @@
+# Copyright (c) 2026 FoBE Studio
+# SPDX-License-Identifier: Apache-2.0
+
+include: spi-device.yaml
+
+properties:
+  reset-gpios:
+    type: phandle-array
+    description: |
+      GPIO connected to the radio NRESET signal.
+
+  busy-gpios:
+    type: phandle-array
+    description: |
+      GPIO connected to the radio BUSY signal.
+
+  irq-gpios:
+    type: phandle-array
+    description: |
+      GPIO connected to the selected LR20XX IRQ DIO.
+
+  antenna-enable-gpios:
+    type: phandle-array
+    description: |
+      Optional external antenna power enable pin.
+
+  tx-enable-gpios:
+    type: phandle-array
+    description: |
+      Optional external antenna switch TX enable GPIO.
+
+  rx-enable-gpios:
+    type: phandle-array
+    description: |
+      Optional external antenna switch RX enable GPIO.
+
+  irq-dio:
+    type: int
+    enum:
+      - 5
+      - 6
+      - 7
+      - 8
+      - 9
+      - 10
+      - 11
+    description: |
+      LR20XX DIO number routed to irq-gpios. Use LR20XX_DIO* constants from
+      dt-bindings/lora/lr20xx.h.
+
+  irq-mask:
+    type: int
+    default: 4294967295
+    description: |
+      IRQ mask allowed on irq-dio. The LR20XX RAL intersects this with the
+      current operation's required IRQ mask.
+
+  dio-sleep-drive:
+    type: int
+    default: 0
+    enum:
+      - 0
+      - 1
+      - 2
+      - 3
+    description: |
+      Sleep drive mode configured on each LR20XX DIO. Use
+      LR20XX_DIO_SLEEP_DRIVE_* constants from dt-bindings/lora/lr20xx.h.
+
+  dio5-rfsw:
+    type: int
+    default: 0
+    description: RF switch state mask for DIO5.
+
+  dio6-rfsw:
+    type: int
+    default: 0
+    description: RF switch state mask for DIO6.
+
+  dio7-rfsw:
+    type: int
+    default: 0
+    description: RF switch state mask for DIO7.
+
+  dio8-rfsw:
+    type: int
+    default: 0
+    description: RF switch state mask for DIO8.
+
+  dio9-rfsw:
+    type: int
+    default: 0
+    description: RF switch state mask for DIO9.
+
+  dio10-rfsw:
+    type: int
+    default: 0
+    description: RF switch state mask for DIO10.
+
+  dio11-rfsw:
+    type: int
+    default: 0
+    description: RF switch state mask for DIO11.
+
+  lf-clk:
+    type: string
+    default: "RC"
+    enum:
+      - "RC"
+      - "XTAL"
+      - "DIO11"
+    description: |
+      Low frequency clock source for the radio.
+      - RC: 32.768KHz RC Oscillator.
+      - XTAL: 32.768KHz Crystal Oscillator.
+      - DIO11: 32.768KHz Signal on DIO11.
+
+  tcxo-voltage:
+    type: int
+    default: 0
+    enum:
+      - 1600
+      - 1700
+      - 1800
+      - 2200
+      - 2400
+      - 2700
+      - 3000
+      - 3300
+      - 0
+    description: |
+      TCXO voltage in mV, except 0 where TCXO is disabled.
+      The default is no TCXO is used.
+
+  tcxo-power-startup-delay-ms:
+    type: int
+    default: 0
+    description: |
+      Startup delay to let the TCXO stabilize after TCXO power on.
+
+  hf-frequency-threshold-hz:
+    type: int
+    default: 1600000000
+    description: |
+      Frequency threshold at or above which the driver selects the LR20XX HF
+      PA/RX path instead of the LF PA/RX path.
+
+  rx-boost-mode-lf:
+    type: int
+    default: 0
+    enum:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+    description: |
+      Default LF RX boost mode for lora_config.rx_boosted =
+      RX_BOOST_DEFAULT. Use LR20XX_RX_BOOST_* constants from
+      dt-bindings/lora/lr20xx.h. When the application explicitly requests
+      RX_BOOST_ENABLED and this value is LR20XX_RX_BOOST_NONE, the driver uses
+      LR20XX_RX_BOOST_MODE_1.
+
+  rx-boost-mode-hf:
+    type: int
+    default: 0
+    enum:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+    description: |
+      Default HF RX boost mode for lora_config.rx_boosted =
+      RX_BOOST_DEFAULT. Use LR20XX_RX_BOOST_* constants from
+      dt-bindings/lora/lr20xx.h. When the application explicitly requests
+      RX_BOOST_ENABLED and this value is LR20XX_RX_BOOST_NONE, the driver uses
+      LR20XX_RX_BOOST_MODE_1.
+
+  front-end-calibration-frequencies-hz:
+    type: array
+    default: [470000000, 897500000, 2441000000]
+    description: |
+      Up to three front-end calibration frequencies. The driver derives each
+      calibration RX path using hf-frequency-threshold-hz.
+
+  tx-power-offset-db:
+    type: int
+    default: 0
+    description: |
+      Board output power offset applied before LR2021 PA table clamping.
+      Valid range is -64 to 64 dB.
+
+  use-dcdc:
+    type: boolean
+    description: Use DCDC regulator instead of LDO.
+
+  force-ldro:
+    type: boolean
+    description: |
+      Force usage of Low Data Rate Optimization even in cases where the
+      symbol time is shorter than 16.38ms.
