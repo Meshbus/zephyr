@@ -1,4 +1,5 @@
 # Copyright (c) 2026 MASSDRIVER EI (massdriver.space)
+# Copyright (c) 2026 FoBE Studio
 # SPDX-License-Identifier: Apache-2.0
 
 include: spi-device.yaml
@@ -119,3 +120,93 @@ properties:
     description: |
       Enable RX boosted mode, which increases the power consumption of
       RX mode by ~2mA in exchange for ~2dB sensitivity improvement.
+
+  antenna-enable-gpios:
+    type: phandle-array
+    description: |
+      Optional external antenna power enable pin.
+
+  tx-enable-gpios:
+    type: phandle-array
+    description: |
+      Optional external antenna switch TX enable GPIO.
+
+  rx-enable-gpios:
+    type: phandle-array
+    description: |
+      Optional external antenna switch RX enable GPIO.
+
+  pa-select:
+    type: int
+    default: 1
+    enum:
+      - 0
+      - 1
+      - 2
+    description: |
+      Power amplifier selection. See LR11XX_PA_SEL_* constants in
+      dt-bindings/lora/lr11xx.h.
+
+  pa-reg-supply:
+    type: int
+    default: 1
+    enum:
+      - 0
+      - 1
+    description: |
+      Power amplifier regulator supply source. See LR11XX_PA_REG_SUPPLY_*
+      constants in dt-bindings/lora/lr11xx.h.
+
+  pa-duty-cycle:
+    type: int
+    default: 4
+    enum:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+    description: |
+      Power amplifier duty cycle register value. LR11XX HPA supports 0 to 4;
+      LPA supports 0 to 7.
+
+  pa-hp-sel:
+    type: int
+    default: 7
+    enum:
+      - 0
+      - 1
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+    description: Power amplifier high-power slice selection.
+
+  tx-power-offset-db:
+    type: int
+    default: 0
+    description: Board output power offset applied before LR11XX PA clamping.
+
+  crc-over-spi:
+    type: boolean
+    description: Enable LR11XX CRC-over-SPI transactions.
+
+  skip-rssi-calibration:
+    type: boolean
+    description: |
+      Skip the LR11XX SET_RSSI_CALIBRATION command when changing RF frequency.
+
+  legacy-lora-public-network:
+    type: boolean
+    description: |
+      Use the deprecated SET_LORA_PUBLIC_NETWORK command for older LR1110
+      firmware that cannot use SET_LORA_SYNC_WORD safely.
+
+  lfclk-in-sleep:
+    type: boolean
+    description: Keep the LR11XX LF clock running while in sleep.

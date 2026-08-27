@@ -1,0 +1,16 @@
+# Copyright (c) 2026 FoBE Studio
+# SPDX-License-Identifier: Apache-2.0
+
+description: Semtech LR1110 LoRa Edge transceiver
+
+compatible: "semtech,lr1110"
+
+include: semtech,lr11xx-base.yaml
+
+properties:
+  reset-gpios:
+    required: true
+  busy-gpios:
+    required: true
+  irq-gpios:
+    required: true
