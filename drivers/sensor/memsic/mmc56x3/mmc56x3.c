@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+#include <errno.h>
+
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/init.h>
@@ -19,6 +21,10 @@
 LOG_MODULE_REGISTER(MMC56X3, CONFIG_SENSOR_LOG_LEVEL);
 
 K_TIMER_DEFINE(meas_req_timer, NULL, NULL);
+
+#define MMC56X3_CHIP_ID_READ_ATTEMPTS 5
+#define MMC56X3_CHIP_ID_READ_RETRY_MS 20
+#define MMC56X3_MEAS_READY_ATTEMPTS 20
 
 #if DT_NUM_INST_STATUS_OKAY(DT_DRV_COMPAT) == 0
 #warning "MMC56X3 driver enabled without any devices"
@@ -137,14 +143,52 @@ int mmc56x3_chip_set_decimation_filter(const struct device *dev, bool bw0, bool 
 {
 	struct mmc56x3_data *data = dev->data;
 	struct mmc56x3_config *config = &data->config;
+	uint8_t ctrl1 = data->ctrl1_cache;
+	int ret;
 
-	data->ctrl1_cache |= (bw0 ? BIT(0) : 0);
-	data->ctrl1_cache |= (bw1 ? BIT(1) : 0);
+	ctrl1 &= ~(BIT(0) | BIT(1));
+	ctrl1 |= (bw0 ? BIT(0) : 0);
+	ctrl1 |= (bw1 ? BIT(1) : 0);
 
+	ret = mmc56x3_reg_write(dev, MMC56X3_REG_INTERNAL_CTRL_1, ctrl1);
+	if (ret < 0) {
+		return ret;
+	}
+
+	data->ctrl1_cache = ctrl1;
 	config->bw0 = bw0;
 	config->bw1 = bw1;
 
-	return mmc56x3_reg_write(dev, MMC56X3_REG_INTERNAL_CTRL_1, data->ctrl1_cache);
+	return 0;
+}
+
+static int mmc56x3_chip_id_read(const struct device *dev, uint8_t *chip_id)
+{
+	int ret = -ENODEV;
+
+	for (uint8_t attempt = 0U; attempt < MMC56X3_CHIP_ID_READ_ATTEMPTS; attempt++) {
+		ret = mmc56x3_bus_check(dev);
+		if (ret < 0) {
+			LOG_DBG("bus check failed: %d", ret);
+		} else {
+			ret = mmc56x3_reg_read(dev, MMC56X3_REG_ID, chip_id, 1);
+			if (ret < 0) {
+				LOG_DBG("ID read failed: %d", ret);
+			} else if (*chip_id == MMC56X3_CHIP_ID) {
+				LOG_DBG("ID OK after %u attempt(s)", attempt + 1U);
+				return 0;
+			} else {
+				ret = -ENOTSUP;
+				LOG_DBG("bad chip id 0x%x", *chip_id);
+			}
+		}
+
+		if ((attempt + 1U) < MMC56X3_CHIP_ID_READ_ATTEMPTS) {
+			k_sleep(K_MSEC(MMC56X3_CHIP_ID_READ_RETRY_MS));
+		}
+	}
+
+	return ret;
 }
 
 static int mmc56x3_chip_init(const struct device *dev)
@@ -152,23 +196,9 @@ static int mmc56x3_chip_init(const struct device *dev)
 	int ret;
 	uint8_t chip_id;
 
-	ret = mmc56x3_bus_check(dev);
+	ret = mmc56x3_chip_id_read(dev, &chip_id);
 	if (ret < 0) {
-		LOG_DBG("bus check failed: %d", ret);
 		return ret;
-	}
-
-	ret = mmc56x3_reg_read(dev, MMC56X3_REG_ID, &chip_id, 1);
-	if (ret < 0) {
-		LOG_DBG("ID read failed: %d", ret);
-		return ret;
-	}
-
-	if (chip_id == MMC56X3_CHIP_ID) {
-		LOG_DBG("ID OK");
-	} else {
-		LOG_DBG("bad chip id 0x%x", chip_id);
-		return -ENOTSUP;
 	}
 
 	ret = mmc56x3_reg_write(dev, MMC56X3_REG_INTERNAL_CTRL_1, MMC56X3_CMD_SW_RESET);
@@ -219,15 +249,18 @@ static int mmc56x3_wait_until_ready(const struct device *dev)
 	int ret;
 
 	/* Wait for measurement to be completed */
-	do {
+	for (uint8_t attempt = 0U; attempt < MMC56X3_MEAS_READY_ATTEMPTS; attempt++) {
 		k_sleep(K_MSEC(3));
 		ret = mmc56x3_reg_read(dev, MMC56X3_REG_STATUS, &status, 1);
 		if (ret < 0) {
 			return ret;
 		}
-	} while ((status & 0xC0) != (MMC56X3_STATUS_MEAS_M_DONE | MMC56X3_STATUS_MEAS_T_DONE));
+		if ((status & 0xC0) == (MMC56X3_STATUS_MEAS_M_DONE | MMC56X3_STATUS_MEAS_T_DONE)) {
+			return 0;
+		}
+	}
 
-	return 0;
+	return -ETIMEDOUT;
 }
 
 int mmc56x3_sample_fetch_helper(const struct device *dev, enum sensor_channel chan,
@@ -366,7 +399,8 @@ static int mmc56x3_chip_configure(const struct device *dev, struct mmc56x3_confi
 static int mmc56x3_attr_set(const struct device *dev, enum sensor_channel chan,
 			    enum sensor_attribute attr, const struct sensor_value *val)
 {
-	struct mmc56x3_config new_config = {};
+	struct mmc56x3_data *data = dev->data;
+	struct mmc56x3_config new_config = data->config;
 	int ret = 0;
 
 	__ASSERT_NO_MSG(val != NULL);
