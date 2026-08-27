@@ -761,7 +761,12 @@ static int send_buf(struct bt_conn *conn, struct net_buf *buf,
 	atomic_dec(&conn->in_ll);
 	(void)sys_slist_find_and_remove(&conn->tx_pending, &tx->node);
 
-	LOG_ERR("Unable to send to driver (err %d)", err);
+	if (err == -EINVAL && is_acl_conn(conn)) {
+		/* Common for some controllers during racey ACL teardown. */
+		LOG_WRN("Unable to send to driver (err %d)", err);
+	} else {
+		LOG_ERR("Unable to send to driver (err %d)", err);
+	}
 
 	/* If we get here, something has seriously gone wrong: the `parent` buf
 	 * (of which the current fragment belongs) should also be destroyed.
@@ -776,7 +781,24 @@ static int send_buf(struct bt_conn *conn, struct net_buf *buf,
 	conn_tx_destroy(conn, tx);
 	k_sem_give(bt_conn_get_pkts(conn));
 
-	/* Merge HCI driver errors */
+	/* Merge HCI driver errors.
+	 *
+	 * Some controllers return -EINVAL when the Host attempts to send ACL data
+	 * after the link is already gone (e.g. peer terminated while upper layers
+	 * still had pending data). Treat this as "not connected" to avoid
+	 * triggering an extra HCI Disconnect that can timeout (and/or corrupt
+	 * internal command bookkeeping) while the controller is already tearing
+	 * down.
+	 *
+	 * This is safe because the Host already validates PB flags and packet
+	 * types before calling send_acl(), so -EINVAL here is effectively a
+	 * controller-side rejection.
+	 */
+	if (err == -EINVAL && is_acl_conn(conn)) {
+		bt_conn_set_state(conn, BT_CONN_DISCONNECTING);
+		return -ENOTCONN;
+	}
+
 	return -EIO;
 
 error_return:
@@ -1073,6 +1095,10 @@ void bt_conn_tx_processor(void)
 	int err = send_buf(conn, buf, buf_len, cb, ud);
 
 	if (err) {
+		if (err == -ENOTCONN) {
+			LOG_WRN("Controller rejected TX for %p, treating as disconnect in progress", conn);
+			goto raise_and_exit;
+		}
 		LOG_ERR("Fatal error (%d). Disconnecting %p", err, conn);
 		bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
 		goto exit;
