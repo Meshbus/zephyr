@@ -130,6 +130,23 @@ enum lora_cad_mode {
 };
 
 /**
+ * @brief LoRa boosted RX mode
+ *
+ * Some radios can be configured with a "boosted" RX setting that improves
+ * sensitivity at the cost of increased current consumption.
+ *
+ * Not all drivers support this setting. Unsupported drivers must ignore it.
+ */
+enum lora_rx_boost {
+	/** Use the driver default (e.g. devicetree configuration, if applicable). */
+	RX_BOOST_DEFAULT = 0,
+	/** Disable boosted RX. */
+	RX_BOOST_DISABLED = 1,
+	/** Enable boosted RX. */
+	RX_BOOST_ENABLED = 2,
+};
+
+/**
  * @struct lora_modem_config
  * Structure containing the configuration of a LoRa modem
  */
@@ -205,6 +222,13 @@ struct lora_modem_config {
 		 */
 		uint8_t detection_minimum;
 	} cad;
+
+	/**
+	 * RX boosted mode (if supported by the driver).
+	 *
+	 * Use @ref RX_BOOST_DEFAULT to keep the driver's default behavior.
+	 */
+	enum lora_rx_boost rx_boosted;
 };
 
 /**
@@ -322,6 +346,13 @@ typedef int (*lora_api_recv_duty_cycle_async)(const struct device *dev,
 					      lora_recv_cb cb, void *user_data);
 
 /**
+ * @brief Callback API for getting instantaneous RSSI
+ *
+ * @see lora_rssi_inst() for argument descriptions.
+ */
+typedef int (*lora_api_rssi_inst)(const struct device *dev, int16_t *rssi);
+
+/**
  * @brief Callback API for transmitting a continuous wave
  *
  * @see lora_test_cw() for argument descriptions.
@@ -353,6 +384,8 @@ __subsystem struct lora_driver_api {
 	lora_api_recv_duty_cycle_async recv_duty_cycle_async;
 	/** @driver_ops_optional @copybrief lora_recv_duty_cycle */
 	lora_api_recv_duty_cycle recv_duty_cycle;
+	/** @driver_ops_optional @copybrief lora_rssi_inst */
+	lora_api_rssi_inst rssi_inst;
 	/** @driver_ops_optional @copybrief lora_test_cw */
 	lora_api_test_cw test_cw;
 };
@@ -534,8 +567,10 @@ static inline int lora_cad_async(const struct device *dev, lora_cad_cb cb,
  *
  * @note This is a blocking call.
  *
- * The transmitter must use a preamble longer than
- * (@p sleep_period + @p rx_period) to guarantee detection.
+ * To guarantee detection, the transmitter preamble must be longer than
+ * (@p sleep_period + @p rx_period). After detection, the radio's
+ * (2 * @p rx_period + @p sleep_period) extension must cover the remaining
+ * preamble and header.
  *
  * @param dev           LoRa device
  * @param rx_period     Listen window duration
@@ -572,8 +607,10 @@ static inline int lora_recv_duty_cycle(const struct device *dev,
  * The duty cycle continues until cancelled by calling this function
  * with @p cb = NULL.
  *
- * The transmitter must use a preamble longer than
- * (@p sleep_period + @p rx_period) to guarantee detection.
+ * To guarantee detection, the transmitter preamble must be longer than
+ * (@p sleep_period + @p rx_period). After detection, the radio's
+ * (2 * @p rx_period + @p sleep_period) extension must cover the remaining
+ * preamble and header.
  *
  * @param dev           LoRa device
  * @param rx_period     Listen window duration
@@ -594,6 +631,30 @@ static inline int lora_recv_duty_cycle_async(const struct device *dev,
 	}
 
 	return api->recv_duty_cycle_async(dev, rx_period, sleep_period, cb, user_data);
+}
+
+/**
+ * @brief Get the instantaneous RSSI value
+ *
+ * Get the current channel energy level. This function should be called while
+ * the modem is in receive mode (e.g., during async receive).
+ *
+ * @param dev   LoRa device
+ * @param rssi  Pointer to store the RSSI value in dBm
+ *
+ * @retval 0 On success
+ * @retval -ENOSYS If the driver doesn't support querying instantaneous RSSI
+ * @retval -errno On failure
+ */
+static inline int lora_rssi_inst(const struct device *dev, int16_t *rssi)
+{
+	const struct lora_driver_api *api = DEVICE_API_GET(lora, dev);
+
+	if (api->rssi_inst == NULL) {
+		return -ENOSYS;
+	}
+
+	return api->rssi_inst(dev, rssi);
 }
 
 /**

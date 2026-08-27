@@ -31,6 +31,12 @@ enum lbm_modem_mode {
 	MODE_CAD = 5,
 };
 
+/* Purpose of the currently running CAD operation. */
+enum lbm_cad_operation {
+	LBM_CAD_OPERATION_SYNC = 0,
+	LBM_CAD_OPERATION_ASYNC,
+};
+
 /* Common LBM modem configuration, must be first element of device config */
 struct lbm_lora_config_common {
 	/* LBM radio abstraction layer structure */
@@ -38,6 +44,7 @@ struct lbm_lora_config_common {
 	bool force_ldro;
 	/* DIO1 interrupt pin - managed by lbm_common.c to control interrupt enable/disable */
 	struct gpio_dt_spec dio1;
+	bool duty_cycle_supported;
 };
 
 /* Common LBM modem data, must be first element of device data */
@@ -47,6 +54,21 @@ struct lbm_lora_data_common {
 	/* Current LoRa parameters */
 	ral_lora_mod_params_t mod_params;
 	ral_lora_pkt_params_t pkt_params;
+	ral_lora_cad_params_t cad_params;
+	/* Cached CAD configuration from lora_config(). */
+	enum lora_cad_mode cad_mode;
+	enum lora_cad_symbol_num cad_symbol_num;
+	uint8_t cad_detection_peak;
+	uint8_t cad_detection_minimum;
+	/* Current CAD operation purpose. */
+	enum lbm_cad_operation cad_operation;
+	/* RX boosted mode selection (used by radios that support it, e.g. SX126x). */
+	enum lora_rx_boost rx_boosted;
+	/* RX duty cycle settings (used by radios that support it, e.g. SX126x). */
+	bool duty_cycle_enabled;
+	uint32_t duty_cycle_rx_time_ms;
+	uint32_t duty_cycle_sleep_time_ms;
+	bool rx_started_with_duty_cycle;
 	/* Operation complete worker */
 	struct k_work_delayable op_done_work;
 	/* RX state storage */
@@ -64,6 +86,18 @@ struct lbm_lora_data_common {
 			void *user_data;
 		} async;
 	} rx_state;
+	/* CAD state storage */
+	union {
+		struct {
+			/* Sync CAD params */
+			bool *detected;
+		} sync;
+		struct {
+			/* Async CAD params */
+			lora_cad_cb cad_cb;
+			void *user_data;
+		} async;
+	} cad_state;
 	/* User signal */
 	struct k_poll_signal *operation_done;
 	/* Current modem state */

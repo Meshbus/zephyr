@@ -110,11 +110,55 @@ struct lbm_sx126x_data {
 
 LOG_MODULE_DECLARE(lbm_driver, CONFIG_LORA_LOG_LEVEL);
 
+static int sx126x_wait_device_ready(const struct device *dev, k_timeout_t timeout);
+static int sx126x_wakeup_sequence(const struct device *dev, k_timeout_t timeout);
+
 static bool sx126x_is_busy(const struct device *dev)
 {
 	const struct lbm_sx126x_config *config = dev->config;
 
 	return gpio_pin_get_dt(&config->busy);
+}
+
+static int sx126x_wakeup_sequence(const struct device *dev, k_timeout_t timeout)
+{
+	const struct lbm_sx126x_config *config = dev->config;
+	const struct spi_cs_control *cs = &config->spi.config.cs;
+	int nss_assert_value;
+	int nss_release_value;
+	int ret;
+
+	if (cs->cs_is_gpio && (cs->gpio.port != NULL)) {
+		/* gpio_pin_set_dt uses logical values: 1 = active, 0 = inactive. */
+		nss_assert_value = 1;
+		nss_release_value = 0;
+
+		/* Assert NSS without clocks, wait BUSY deasserts, then release NSS. */
+		ret = gpio_pin_set_dt(&cs->gpio, nss_assert_value);
+		if (ret) {
+			return ret;
+		}
+
+		ret = sx126x_wait_device_ready(dev, timeout);
+		(void)gpio_pin_set_dt(&cs->gpio, nss_release_value);
+		return ret;
+	}
+
+	/* Toggle NSS through a short SPI transaction, then wait for BUSY deassertion. */
+	uint8_t get_status_cmd[2] = {SX126X_GET_STATUS, 0xFF};
+	const struct spi_buf tx_bufs[] = {
+		{
+			.buf = (void *)get_status_cmd,
+			.len = sizeof(get_status_cmd),
+		},
+	};
+	const struct spi_buf_set tx_buf_set = {tx_bufs, .count = ARRAY_SIZE(tx_bufs)};
+
+	ret = spi_write_dt(&config->spi, &tx_buf_set);
+	if (ret) {
+		return ret;
+	}
+	return sx126x_wait_device_ready(dev, timeout);
 }
 
 static int sx126x_wait_device_ready(const struct device *dev, k_timeout_t timeout)
@@ -134,26 +178,20 @@ static int sx126x_ensure_device_ready(const struct device *dev, k_timeout_t time
 {
 	const struct lbm_sx126x_config *config = dev->config;
 	struct lbm_sx126x_data *data = dev->data;
-	uint8_t get_status_cmd[2] = {SX126X_GET_STATUS, 0xFF};
-	const struct spi_buf tx_bufs[] = {
-		{
-			.buf = (void *)get_status_cmd,
-			.len = sizeof(get_status_cmd),
-		},
-	};
-	const struct spi_buf_set tx_buf_set = {tx_bufs, .count = ARRAY_SIZE(tx_bufs)};
 	int ret;
 
 	if (data->asleep) {
 		LOG_DBG("SLEEP -> ACTIVE");
 		/* Re-enable the DIO1 interrupt */
-		gpio_pin_interrupt_configure_dt(&config->lbm_common.dio1, GPIO_INT_EDGE_TO_ACTIVE);
-		/* DO NOT USE sx126x_get_status as this will result in recursion */
-		ret = spi_write_dt(&config->spi, &tx_buf_set);
+		gpio_pin_interrupt_configure_dt(&config->lbm_common.dio1,
+						GPIO_INT_EDGE_TO_ACTIVE);
+		ret = sx126x_wakeup_sequence(dev, timeout);
 		if (ret) {
 			return ret;
 		}
+		data->asleep = false;
 	}
+
 	ret = sx126x_wait_device_ready(dev, timeout);
 	data->asleep = false;
 	return ret;
@@ -181,7 +219,24 @@ sx126x_hal_status_t sx126x_hal_write(const void *context, const uint8_t *command
 
 	LOG_DBG("CMD[0]=0x%02x CMD_LEN=%d DATA_LEN=%d", command[0], command_length, data_length);
 
+	if (dev_data->lbm_common.rx_started_with_duty_cycle && sx126x_is_busy(dev)) {
+		/* Duty-cycle RX can leave the radio asleep between windows.
+		 * Wake it first so subsequent commands don't stall for sleep_time.
+		 */
+		ret = sx126x_wakeup_sequence(dev, K_SECONDS(1));
+		if (ret) {
+			return SX126X_HAL_STATUS_ERROR;
+		}
+	}
+
 	ret = sx126x_ensure_device_ready(dev, K_SECONDS(1));
+	if (ret && (command[0] == SX126X_SET_SLEEP) &&
+	    dev_data->lbm_common.rx_started_with_duty_cycle && sx126x_is_busy(dev)) {
+		/* In RX duty-cycle mode the radio can be sleeping autonomously.
+		 * Wake it once and retry readiness before sending SET_SLEEP.
+		 */
+		ret = sx126x_wakeup_sequence(dev, K_SECONDS(1));
+	}
 	if (ret) {
 		return SX126X_HAL_STATUS_ERROR;
 	}
@@ -194,7 +249,8 @@ sx126x_hal_status_t sx126x_hal_write(const void *context, const uint8_t *command
 	if (command[0] == SX126X_SET_SLEEP) {
 		LOG_DBG("ACTIVE -> SLEEP");
 		/* Disable the DIO1 interrupt to save power */
-		(void)gpio_pin_interrupt_configure_dt(&config->lbm_common.dio1, GPIO_INT_DISABLE);
+		(void)gpio_pin_interrupt_configure_dt(&config->lbm_common.dio1,
+						      GPIO_INT_DISABLE);
 		dev_data->asleep = true;
 		/* Wait for sleep to take effect */
 		k_sleep(K_MSEC(1));
@@ -357,8 +413,23 @@ void ral_sx126x_bsp_get_rx_boost_cfg(const void *context, bool *rx_boost_is_acti
 {
 	const struct device *dev = context;
 	const struct lbm_sx126x_config *config = dev->config;
+	const struct lbm_sx126x_data *data = dev->data;
 
-	*rx_boost_is_activated = config->rx_boosted;
+	switch (data->lbm_common.rx_boosted) {
+	case RX_BOOST_DEFAULT:
+		*rx_boost_is_activated = config->rx_boosted;
+		break;
+	case RX_BOOST_DISABLED:
+		*rx_boost_is_activated = false;
+		break;
+	case RX_BOOST_ENABLED:
+		*rx_boost_is_activated = true;
+		break;
+	default:
+		/* Be robust against uninitialised/invalid values. */
+		*rx_boost_is_activated = config->rx_boosted;
+		break;
+	}
 }
 
 void ral_sx126x_bsp_get_ocp_value(const void *context, uint8_t *ocp_in_step_of_2_5_ma)
@@ -577,6 +648,7 @@ static int sx126x_init(const struct device *dev)
 		.lbm_common.ralf = RALF_SX126X_INSTANTIATE(DEVICE_DT_GET(node_id)),                \
 		.lbm_common.force_ldro = DT_PROP(node_id, force_ldro),                             \
 		.lbm_common.dio1 = GPIO_DT_SPEC_GET(node_id, dio1_gpios),                          \
+		.lbm_common.duty_cycle_supported = true,                                        \
 		.spi = SPI_DT_SPEC_GET(                                                            \
 			node_id, SPI_WORD_SET(8) | SPI_OP_MODE_MASTER | SPI_TRANSFER_MSB),         \
 		.reset = GPIO_DT_SPEC_GET(node_id, reset_gpios),                                   \
