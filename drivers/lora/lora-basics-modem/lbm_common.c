@@ -1400,6 +1400,17 @@ int lbm_lora_common_init(const struct device *dev)
 	return 0;
 }
 
+int lbm_lora_rssi(const struct device *dev, int16_t *rssi)
+{
+	const struct lbm_lora_config_common *config = dev->config;
+
+	if (ral_get_rssi_inst(&config->ralf.ral, rssi) != RAL_STATUS_OK) {
+		return -EIO;
+	}
+
+	return 0;
+}
+
 DEVICE_API(lora, lbm_lora_api) = {
 	.config = lbm_lora_config,
 	.airtime = lbm_lora_airtime,
@@ -1413,4 +1424,5 @@ DEVICE_API(lora, lbm_lora_api) = {
 	.recv_duty_cycle = lbm_lora_recv_duty_cycle,
 	.rssi_inst = lbm_lora_rssi_inst,
 	.test_cw = lbm_lora_test_cw,
+	.rssi = lbm_lora_rssi,
 };
